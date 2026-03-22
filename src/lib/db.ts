@@ -1,6 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { Block, Page, StoragePaths, Workspace } from "./types";
 import { parseBlockContent } from "./utils";
+import {
+  readBrowserAsset,
+  readBrowserSnapshot,
+  writeBrowserAsset,
+  writeBrowserSnapshot
+} from "./browserStorage";
+import { isTauriRuntime } from "./platform";
 
 interface CommandWorkspace {
   id: string;
@@ -31,15 +37,43 @@ interface CommandBlock {
 
 let storagePathsPromise: Promise<StoragePaths> | null = null;
 
+const invokeTauri = async <T>(command: string, args?: Record<string, unknown>) => {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T>(command, args);
+};
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file."));
+    reader.readAsDataURL(file);
+  });
+
+const getExtension = (name: string) => {
+  const parts = name.split(".");
+  return parts.length > 1 ? parts[parts.length - 1]?.toLowerCase() ?? "" : "";
+};
+
 export const getStoragePaths = () => {
   if (!storagePathsPromise) {
-    storagePathsPromise = invoke<StoragePaths>("get_storage_paths");
+    storagePathsPromise = isTauriRuntime()
+      ? invokeTauri<StoragePaths>("get_storage_paths")
+      : Promise.resolve({
+          baseDir: "browser://local-storage",
+          dbPath: "browser://local-storage/db",
+          assetsDir: "browser://local-storage/assets"
+        });
   }
   return storagePathsPromise;
 };
 
 export const loadWorkspaces = async (): Promise<Workspace[]> => {
-  const rows = await invoke<CommandWorkspace[]>("read_workspaces");
+  if (!isTauriRuntime()) {
+    return readBrowserSnapshot().workspaces;
+  }
+
+  const rows = await invokeTauri<CommandWorkspace[]>("read_workspaces");
   return rows.map((row) => ({
     id: row.id,
     name: row.name,
@@ -48,7 +82,11 @@ export const loadWorkspaces = async (): Promise<Workspace[]> => {
 };
 
 export const loadPages = async (): Promise<Page[]> => {
-  const rows = await invoke<CommandPage[]>("read_pages", { workspaceId: null });
+  if (!isTauriRuntime()) {
+    return readBrowserSnapshot().pages;
+  }
+
+  const rows = await invokeTauri<CommandPage[]>("read_pages", { workspaceId: null });
   return rows.map((row) => ({
     id: row.id,
     workspaceId: row.workspaceId,
@@ -58,7 +96,11 @@ export const loadPages = async (): Promise<Page[]> => {
 };
 
 export const loadBlocks = async (): Promise<Record<string, Block>> => {
-  const rows = await invoke<CommandBlock[]>("read_blocks", { pageId: null });
+  if (!isTauriRuntime()) {
+    return readBrowserSnapshot().blocks;
+  }
+
+  const rows = await invokeTauri<CommandBlock[]>("read_blocks", { pageId: null });
   return rows.reduce<Record<string, Block>>((accumulator, row) => {
     accumulator[row.id] = {
       id: row.id,
@@ -77,19 +119,72 @@ export const loadBlocks = async (): Promise<Record<string, Block>> => {
   }, {});
 };
 
-export const upsertWorkspace = async (workspace: Workspace) =>
-  invoke("upsert_workspace", { workspace });
+export const upsertWorkspace = async (workspace: Workspace) => {
+  if (!isTauriRuntime()) {
+    const snapshot = readBrowserSnapshot();
+    snapshot.workspaces = snapshot.workspaces.some((item) => item.id === workspace.id)
+      ? snapshot.workspaces.map((item) => (item.id === workspace.id ? workspace : item))
+      : [...snapshot.workspaces, workspace];
+    writeBrowserSnapshot(snapshot);
+    return;
+  }
 
-export const deleteWorkspace = async (workspaceId: string) =>
-  invoke("delete_workspace", { workspaceId });
+  await invokeTauri("upsert_workspace", { workspace });
+};
 
-export const upsertPage = async (page: Page) => invoke("upsert_page", { page });
+export const deleteWorkspace = async (workspaceId: string) => {
+  if (!isTauriRuntime()) {
+    const snapshot = readBrowserSnapshot();
+    snapshot.workspaces = snapshot.workspaces.filter((item) => item.id !== workspaceId);
+    snapshot.pages = snapshot.pages.filter((item) => item.workspaceId !== workspaceId);
+    snapshot.blocks = Object.fromEntries(
+      Object.entries(snapshot.blocks).filter(([, block]) =>
+        snapshot.pages.some((page) => page.id === block.pageId)
+      )
+    );
+    writeBrowserSnapshot(snapshot);
+    return;
+  }
 
-export const deletePage = async (pageId: string) =>
-  invoke("delete_page", { pageId });
+  await invokeTauri("delete_workspace", { workspaceId });
+};
 
-export const upsertBlock = async (block: Block) =>
-  invoke("upsert_block", {
+export const upsertPage = async (page: Page) => {
+  if (!isTauriRuntime()) {
+    const snapshot = readBrowserSnapshot();
+    snapshot.pages = snapshot.pages.some((item) => item.id === page.id)
+      ? snapshot.pages.map((item) => (item.id === page.id ? page : item))
+      : [...snapshot.pages, page];
+    writeBrowserSnapshot(snapshot);
+    return;
+  }
+
+  await invokeTauri("upsert_page", { page });
+};
+
+export const deletePage = async (pageId: string) => {
+  if (!isTauriRuntime()) {
+    const snapshot = readBrowserSnapshot();
+    snapshot.pages = snapshot.pages.filter((item) => item.id !== pageId);
+    snapshot.blocks = Object.fromEntries(
+      Object.entries(snapshot.blocks).filter(([, block]) => block.pageId !== pageId)
+    );
+    writeBrowserSnapshot(snapshot);
+    return;
+  }
+
+  await invokeTauri("delete_page", { pageId });
+};
+
+export const upsertBlock = async (block: Block) => {
+  if (!isTauriRuntime()) {
+    const snapshot = readBrowserSnapshot();
+    snapshot.blocks[block.id] = block;
+    writeBrowserSnapshot(snapshot);
+    return;
+  }
+
+  await invokeTauri("upsert_block", {
     block: {
       id: block.id,
       pageId: block.pageId,
@@ -104,26 +199,84 @@ export const upsertBlock = async (block: Block) =>
       updatedAt: block.updatedAt
     }
   });
+};
 
-export const deleteBlock = async (blockId: string) =>
-  invoke("delete_block", { blockId });
+export const deleteBlock = async (blockId: string) => {
+  if (!isTauriRuntime()) {
+    const snapshot = readBrowserSnapshot();
+    delete snapshot.blocks[blockId];
+    writeBrowserSnapshot(snapshot);
+    return;
+  }
 
-export const deleteBlocks = async (blockIds: string[]) =>
-  invoke("delete_blocks", { blockIds });
+  await invokeTauri("delete_block", { blockId });
+};
 
-export const importAsset = async (sourcePath: string) =>
-  invoke<{
+export const deleteBlocks = async (blockIds: string[]) => {
+  if (!isTauriRuntime()) {
+    const snapshot = readBrowserSnapshot();
+    for (const blockId of blockIds) {
+      delete snapshot.blocks[blockId];
+    }
+    writeBrowserSnapshot(snapshot);
+    return;
+  }
+
+  await invokeTauri("delete_blocks", { blockIds });
+};
+
+export const importAsset = async (source: string | File) => {
+  if (!isTauriRuntime()) {
+    if (!(source instanceof File)) {
+      throw new Error("Browser imports require a File object.");
+    }
+
+    const extension = getExtension(source.name);
+    const assetPath = `web-assets/${crypto.randomUUID()}${extension ? `.${extension}` : ""}`;
+    const dataUrl = await readFileAsDataUrl(source);
+    writeBrowserAsset(assetPath, dataUrl);
+
+    return {
+      assetPath,
+      absolutePath: assetPath,
+      originalName: source.name,
+      extension
+    };
+  }
+
+  return invokeTauri<{
     assetPath: string;
     absolutePath: string;
     originalName: string;
     extension: string;
-  }>("import_asset", { sourcePath });
+  }>("import_asset", { sourcePath: source });
+};
 
-export const openFileInOs = async (path: string) =>
-  invoke("open_file_in_os", { path });
+export const openFileInOs = async (path: string) => {
+  if (!isTauriRuntime()) {
+    window.open(path, "_blank", "noopener,noreferrer");
+    return;
+  }
 
-export const openAssetInOs = async (relativePath: string) =>
-  invoke("open_asset_in_os", { relativePath });
+  await invokeTauri("open_file_in_os", { path });
+};
 
-export const openImageViewer = async (relativePath: string) =>
-  invoke("open_image_viewer", { relativePath });
+export const openAssetInOs = async (relativePath: string) => {
+  if (!isTauriRuntime()) {
+    const asset = readBrowserAsset(relativePath);
+    if (asset) {
+      window.open(asset, "_blank", "noopener,noreferrer");
+    }
+    return;
+  }
+
+  await invokeTauri("open_asset_in_os", { relativePath });
+};
+
+export const openImageViewer = async (_relativePath: string) => {
+  if (!isTauriRuntime()) {
+    return;
+  }
+
+  await invokeTauri("open_image_viewer", { relativePath: _relativePath });
+};

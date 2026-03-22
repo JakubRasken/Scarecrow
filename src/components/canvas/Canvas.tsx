@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import clsx from "clsx";
-import { open } from "@tauri-apps/plugin-dialog";
 import Grid from "./Grid";
 import SelectionBox from "./SelectionBox";
 import BlockShell from "./BlockShell";
@@ -13,6 +12,7 @@ import { useScarecrowStore } from "../../store";
 import { importAsset } from "../../lib/db";
 import { resolveAssetUrl } from "../../lib/assets";
 import { isImageFile, isPdfFile, screenToWorld } from "../../lib/utils";
+import { pickImportSources } from "../../lib/platform";
 import type { Block } from "../../lib/types";
 
 interface DropEventDetail {
@@ -30,6 +30,9 @@ const loadImageAspect = async (relativePath: string) =>
     image.onload = () => resolve(image.naturalWidth / image.naturalHeight || 1.5);
     image.onerror = () => resolve(1.5);
   });
+
+const getImportName = (source: string | File) =>
+  typeof source === "string" ? source : source.name;
 
 const Canvas = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -113,14 +116,15 @@ const Canvas = () => {
     });
   }, [containerRect, currentPageId, fitRequest, pageBlocks, setViewport]);
 
-  const createImportedBlock = async (path: string, clientX: number, clientY: number) => {
+  const createImportedBlock = async (source: string | File, clientX: number, clientY: number) => {
     if (!containerRect) {
       return;
     }
     const world = screenToWorld({ x: clientX, y: clientY }, containerRect, viewport);
+    const name = getImportName(source);
 
-    if (isImageFile(path)) {
-      const imported = await importAsset(path);
+    if (isImageFile(name)) {
+      const imported = await importAsset(source);
       const aspectRatio = await loadImageAspect(imported.assetPath);
       addBlock("image", world.x, world.y, {
         assetPath: imported.assetPath,
@@ -130,13 +134,14 @@ const Canvas = () => {
       return;
     }
 
-    if (isPdfFile(path)) {
-      const imported = await importAsset(path);
+    if (isPdfFile(name)) {
+      const imported = await importAsset(source);
       addBlock("pdf", world.x, world.y, {
         assetPath: imported.assetPath,
         currentPage: 1,
         totalPages: 1,
-        zoom: 1
+        zoom: 1,
+        aspectRatio: 210 / 297
       });
     }
   };
@@ -165,23 +170,17 @@ const Canvas = () => {
     }
 
     if (activeTool === "image") {
-      const file = await open({
-        multiple: false,
-        filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "svg"] }]
-      });
-      if (typeof file === "string") {
-        await createImportedBlock(file, clientX, clientY);
+      const [source] = await pickImportSources(".jpg,.jpeg,.png,.gif,.webp,.svg");
+      if (source) {
+        await createImportedBlock(source, clientX, clientY);
       }
       return;
     }
 
     if (activeTool === "pdf") {
-      const file = await open({
-        multiple: false,
-        filters: [{ name: "PDF", extensions: ["pdf"] }]
-      });
-      if (typeof file === "string") {
-        await createImportedBlock(file, clientX, clientY);
+      const [source] = await pickImportSources(".pdf");
+      if (source) {
+        await createImportedBlock(source, clientX, clientY);
       }
       return;
     }

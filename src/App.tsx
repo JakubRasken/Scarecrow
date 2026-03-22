@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import Canvas from "./components/canvas/Canvas";
 import Toolbar from "./components/toolbar/Toolbar";
 import WorkspacePanel from "./components/sidebar/WorkspacePanel";
@@ -10,6 +8,7 @@ import { loadInitialData, useScarecrowStore } from "./store";
 import { createAssetObjectUrl } from "./lib/assets";
 import { parseVideoUrl, pluralize } from "./lib/utils";
 import { ChevronRightIcon } from "./components/common/Icons";
+import { closeCurrentWindow, isTauriRuntime, listenAppEvent } from "./lib/platform";
 
 interface DragDropPayload {
   kind: "enter" | "over" | "drop" | "leave";
@@ -234,7 +233,7 @@ const App = () => {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         if (viewerRequest.standalone) {
-          void getCurrentWindow().close();
+          void closeCurrentWindow();
         } else {
           setImageViewer({ open: false, assetPath: null, name: null });
         }
@@ -253,7 +252,7 @@ const App = () => {
       return;
     }
 
-    const unlistenPromise = listen<DragDropPayload>(
+    const unlistenPromise = listenAppEvent<DragDropPayload>(
       "scarecrow://drag-drop",
       async (event) => {
         const payload = event.payload;
@@ -289,7 +288,7 @@ const App = () => {
 
   const closeViewer = () => {
     if (viewerRequest.standalone) {
-      void getCurrentWindow().close();
+      void closeCurrentWindow();
     } else {
       setImageViewer({ open: false, assetPath: null, name: null });
     }
