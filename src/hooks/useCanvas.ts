@@ -19,7 +19,7 @@ export const useCanvas = (containerRect: DOMRect | null) => {
     if (!containerRect) {
       return pageBlocks;
     }
-    const buffer = 200 / viewport.zoom;
+    const buffer = Math.max(600 / viewport.zoom, 360);
     const bounds = {
       left: (-viewport.x) / viewport.zoom - buffer,
       top: (-viewport.y) / viewport.zoom - buffer,

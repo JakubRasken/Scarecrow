@@ -206,7 +206,6 @@ const App = () => {
 
     const assetPath = viewerRequest.assetPath;
     let active = true;
-    let currentUrl = "";
     setViewerLoading(true);
     setViewerError(null);
 
@@ -214,10 +213,8 @@ const App = () => {
       try {
         const url = await createAssetObjectUrl(assetPath);
         if (!active) {
-          URL.revokeObjectURL(url);
           return;
         }
-        currentUrl = url;
         setViewerAsset(url);
       } catch (error) {
         if (!active) {
@@ -248,9 +245,6 @@ const App = () => {
     return () => {
       active = false;
       window.removeEventListener("keydown", handleEscape);
-      if (currentUrl) {
-        URL.revokeObjectURL(currentUrl);
-      }
     };
   }, [setImageViewer, viewerRequest.assetPath, viewerRequest.open, viewerRequest.standalone]);
 

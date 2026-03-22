@@ -11,7 +11,6 @@ const ImageBlock = memo(({ block }: { block: ImageBlockType }) => {
 
   useEffect(() => {
     let active = true;
-    let currentUrl = "";
     setAssetUrl("");
     setError("");
 
@@ -19,10 +18,8 @@ const ImageBlock = memo(({ block }: { block: ImageBlockType }) => {
       try {
         const url = await createAssetObjectUrl(block.content.assetPath);
         if (!active) {
-          URL.revokeObjectURL(url);
           return;
         }
-        currentUrl = url;
         setAssetUrl(url);
       } catch (loadError) {
         if (!active) {
@@ -36,9 +33,6 @@ const ImageBlock = memo(({ block }: { block: ImageBlockType }) => {
 
     return () => {
       active = false;
-      if (currentUrl) {
-        URL.revokeObjectURL(currentUrl);
-      }
     };
   }, [block.content.assetPath]);
 
